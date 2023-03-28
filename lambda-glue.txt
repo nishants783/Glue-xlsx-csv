@@ -1,0 +1,429 @@
+import boto3
+
+def lambda_handler(event, context):
+    # Get the S3 client
+    s3 = boto3.client("s3")
+    
+    # Get the S3 event details
+    bucket_name = event["Records"][0]["s3"]["bucket"]["name"]
+    object_key = event["Records"][0]["s3"]["object"]["key"]
+    
+    # Trigger the ETL job "dsfunction" using the object key
+    # You can replace this with your ETL job triggering logic
+    etl_job_response = dsfunction_job_trigger(object_key)
+    
+    # Return the response of the ETL job trigger
+    return etl_job_response
+
+
+import pandas as pd
+
+def dsfunction_job_trigger(object_key):
+    # Connect to the S3 bucket and read the XLSX file
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket="your-bucket-name", Key=object_key)
+    xlsx_df = pd.read_excel(io.BytesIO(obj['Body'].read()))
+    
+    # Convert the XLSX file to a CSV file
+    csv_file = object_key.replace(".xlsx", ".csv")
+    xlsx_df.to_csv(csv_file, index=False)
+    
+    # Upload the CSV file to S3
+    s3.upload_file(csv_file, "your-bucket-name", csv_file)
+    
+    # Return a success response
+    return {"statusCode": 200, "message": "ETL job completed successfully"}
+
+
+######################working xlsx####################
+
+#importing pandas as pd
+import pandas as pd
+
+# Read and store content
+# of an excel file
+read_file = pd.read_excel ("input_bucket/Test.xlsx")
+
+# Write the dataframe object
+# into csv file
+read_file.to_csv ("output_bucket/Test.csv",
+				index = None,
+				header=True)
+	
+# read csv file and convert
+# into a dataframe object
+df = pd.DataFrame(pd.read_csv("output_bucket/Test.csv"))
+
+# show the dataframe
+df
+
+
+#################### same but better #########################
+
+import sys
+import boto3
+import pandas as pd
+
+# Get the latest file in the input S3 bucket
+s3 = boto3.client("s3")
+input_bucket = "ds-campaign-1"
+objects = s3.list_objects(Bucket=input_bucket)["Contents"]
+latest_file = sorted(objects, key=lambda x: x["LastModified"], reverse=True)[0]["Key"]
+
+# Read the latest Excel file from S3
+s3_resource = boto3.resource("s3")
+obj = s3_resource.Object(input_bucket, latest_file)
+file = obj.get()["Body"].read()
+read_file = pd.read_excel(file)
+
+# Write the dataframe to a CSV file and save to S3
+output_bucket = "output77"
+read_file.to_csv("Test.csv", index=None, header=True)
+s3.upload_file("Test.csv", output_bucket, "Test.csv")
+
+
+###################### final with locations ######################
+
+import sys
+import boto3
+import pandas as pd
+
+# Get all the files in the input S3 bucket
+s3 = boto3.client("s3")
+input_bucket = "ds-campaign-1"
+objects = s3.list_objects(Bucket=input_bucket)["Contents"]
+files = [obj["Key"] for obj in objects]
+
+for file_name in files:
+    # Read the Excel file from S3
+    s3_resource = boto3.resource("s3")
+    obj = s3_resource.Object(input_bucket, file_name)
+    file = obj.get()["Body"].read()
+    read_file = pd.read_excel(file)
+
+    # Write the dataframe to a CSV file and save to S3
+    output_bucket = "output77"
+    csv_file_name = file_name.replace(".xlsx", ".csv")
+    csv_file_path = "ds-dw/" + csv_file_name
+    read_file.to_csv(csv_file_name, index=None, header=True)
+    s3.upload_file(csv_file_name, output_bucket, csv_file_path)
+
+
+################################# same bucket ##################################
+
+
+import sys
+import boto3
+import pandas as pd
+import io
+
+# Connect to S3 and get the resource object
+s3 = boto3.client("s3")
+s3_resource = boto3.resource("s3")
+
+# Set the input and output folders and bucket
+bucket = "ds-campaign-1"
+input_folder = "xlsx-formatted-folder/"
+output_folder = "csv-processed-folder/"
+
+# Check if the output folder exists, and if not, create it
+try:
+    s3.list_objects(Bucket=bucket, Prefix=output_folder)
+except:
+    s3.put_object(Bucket=bucket, Key=output_folder)
+
+# List all the Excel files in the input folder
+objects = s3.list_objects(Bucket=bucket, Prefix=input_folder)["Contents"]
+files = [obj["Key"] for obj in objects if obj["Key"].endswith(".xlsx")]
+
+for file_name in files:
+    # Read the Excel file from S3
+    obj = s3_resource.Object(bucket, file_name)
+    file = obj.get()["Body"].read()
+    read_file = pd.read_excel(file)
+
+    # Write the dataframe to a CSV file
+    csv_file_name = file_name.replace(".xlsx", ".csv").replace(input_folder, output_folder)
+    csv_buffer = io.StringIO()
+    read_file.to_csv(csv_buffer, index=None, header=True)
+
+    # Upload the CSV file to the output folder in S3
+    s3.put_object(Bucket=bucket, Key=csv_file_name, Body=csv_buffer.getvalue().encode('utf-8'))
+
+
+######################################## cloudwatch event lambda ##############################3
+
+import boto3
+
+def lambda_handler(event, context):
+    s3 = boto3.client('s3')
+    src_bucket = 'output77'
+    src_prefix = 'ds-dw'
+    dest_bucket = 'output77'
+    dest_prefix = 'ds-lead'
+
+    # List objects in the ds-dw folder
+    objects = s3.list_objects_v2(Bucket=src_bucket, Prefix=src_prefix)
+
+    # Filter out the subfolders and only copy the files
+    files = [obj['Key'] for obj in objects.get('Contents', []) if obj['Key'] != src_prefix+'/']
+
+    # Copy the files to the ds-lead folder
+    if len(files) > 0:
+        for key in files:
+            new_key = dest_prefix + '/' + key.split('/')[-1]
+            s3.copy_object(Bucket=dest_bucket, CopySource={'Bucket': src_bucket, 'Key': key}, Key=new_key)
+            print(f"Copied {key} to {new_key}")
+
+        # Delete the files from the ds-dw folder
+        s3.delete_objects(
+            Bucket=src_bucket,
+            Delete={
+                'Objects': [{'Key': key} for key in files],
+                'Quiet': True
+            }
+        )
+
+        print(f"Copied {len(files)} files from {src_prefix} to {dest_prefix} and deleted them from {src_prefix}")
+    else:
+        print(f"No files found in {src_prefix} folder")
+
+################################### coding for etl with two output folders at same time xlsx to csv ################################
+
+
+import sys
+import boto3
+import pandas as pd
+import io
+import datetime
+
+# Connect to S3 and get the resource object
+s3 = boto3.client("s3")
+s3_resource = boto3.resource("s3")
+
+# Set the input and output folders and bucket
+bucket = "ds-aaic-sachin"
+input_folder = "converter_output/"
+output_folder = "csv_output/"
+archive_folder = "archived_csv/"
+
+# Check if the output folders exist, and if not, create them
+try:
+    s3.list_objects(Bucket=bucket, Prefix=output_folder)
+except:
+    s3.put_object(Bucket=bucket, Key=output_folder)
+
+try:
+    s3.list_objects(Bucket=bucket, Prefix=archive_folder)
+except:
+    s3.put_object(Bucket=bucket, Key=archive_folder)
+
+# Get the list of already processed files and their modification times
+processed_files = {}
+try:
+    processed_objects = s3.list_objects(Bucket=bucket, Prefix=output_folder)["Contents"]
+    for obj in processed_objects:
+        if obj["Key"].endswith(".csv"):
+            processed_files[obj["Key"]] = obj["LastModified"]
+except:
+    pass
+
+# List all the Excel files in the input folder and convert new files
+objects = s3.list_objects(Bucket=bucket, Prefix=input_folder)["Contents"]
+for obj in objects:
+    file_name = obj["Key"]
+    input_last_modified = obj["LastModified"]
+    if not file_name.endswith(".xlsx"):
+        continue
+    csv_file_name = file_name.replace(".xlsx", ".csv").replace(input_folder, output_folder)
+    archive_file_name = file_name.replace(".xlsx", f"_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.csv").replace(input_folder, archive_folder)
+    if csv_file_name in processed_files:
+        output_last_modified = processed_files[csv_file_name]
+        if output_last_modified >= input_last_modified:
+            continue
+    obj = s3_resource.Object(bucket, file_name)
+    file = obj.get()["Body"].read()
+    read_file = pd.read_excel(file)
+    csv_buffer = io.StringIO()
+    read_file.to_csv(csv_buffer, index=None, header=True)
+    csv_buffer_encoded = csv_buffer.getvalue().encode('utf-8')
+    s3.put_object(Bucket=bucket, Key=csv_file_name, Body=csv_buffer_encoded)
+    s3.put_object(Bucket=bucket, Key=archive_file_name, Body=csv_buffer_encoded)
+    processed_files[csv_file_name] = s3.head_object(Bucket=bucket, Key=csv_file_name)["LastModified"]
+
+
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:DeleteObject"
+            ],
+            "Resource": "arn:aws:s3:::prod-snowpipe-bucket/*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation"
+            ],
+            "Resource": "arn:aws:s3:::prod-snowpipe-bucket"
+        }
+    ]
+}
+
+
+################################# copy files from one bucket to another without duplicating with scheduling in event bridge ##################
+
+
+import boto3
+
+def lambda_handler(event, context):
+    s3 = boto3.client('s3')
+    src_bucket = 'ds-aaic-sachin'
+    src_prefix = 'converter_output/'
+    dest_bucket = 'output77'
+    dest_prefix = 'csv_output'
+
+    # List objects in the ds-dw folder
+    objects = s3.list_objects_v2(Bucket=src_bucket, Prefix=src_prefix)
+
+    # Filter out the subfolders and only copy the files
+    files = [obj['Key'] for obj in objects.get('Contents', []) if obj['Key'] != src_prefix+'/']
+
+    # Copy the files to the ds-lead folder
+    if len(files) > 0:
+        for key in files:
+            new_key = dest_prefix + '/' + key.split('/')[-1]
+            try:
+                dest_object = s3.head_object(Bucket=dest_bucket, Key=new_key)
+                print(f"Object {new_key} already exists in {dest_bucket}")
+            except:
+                s3.copy_object(Bucket=dest_bucket, CopySource={'Bucket': src_bucket, 'Key': key}, Key=new_key)
+                print(f"Copied {key} to {new_key}")
+
+        print(f"Copied {len(files)} files from {src_prefix} to {dest_prefix}")
+    else:
+        print(f"No files found in {src_prefix} folder")
+
+
+##############################above code updated with folder locations #########################
+
+import boto3
+from urllib.parse import urlparse
+
+def lambda_handler(event, context):
+    s3 = boto3.client('s3')
+
+    # Parse the S3 URLs for source and destination folders
+    src_folder_url = "s3://prod-convertr-demandscience-bucket/DATAWAREHOUSE/Snowflake/FOR PROCESSING/"
+    dest_folder_url = "s3://prod-snowpipe-bucket/converter_output"
+    src_parsed = urlparse(src_folder_url)
+    dest_parsed = urlparse(dest_folder_url)
+    src_bucket = src_parsed.netloc
+    dest_bucket = dest_parsed.netloc
+    src_prefix = src_parsed.path.lstrip('/')
+    dest_prefix = dest_parsed.path.lstrip('/')
+
+    # List objects in the source folder
+    objects = s3.list_objects_v2(Bucket=src_bucket, Prefix=src_prefix)
+
+    # Filter out the subfolders and only copy the files
+    files = [obj['Key'] for obj in objects.get('Contents', []) if obj['Key'] != src_prefix+'/']
+
+    # Copy the files to the destination folder if they don't already exist
+    if len(files) > 0:
+        for key in files:
+            new_key = dest_prefix + '/' + key.split('/')[-1]
+            try:
+                dest_object = s3.get_object(Bucket=dest_bucket, Key=new_key)
+                print(f"File {new_key} already exists in {dest_prefix}")
+            except s3.exceptions.NoSuchKey:
+                s3.copy_object(Bucket=dest_bucket, CopySource={'Bucket': src_bucket, 'Key': key}, Key=new_key)
+                print(f"Copied {key} to {new_key}")
+
+        print(f"Copied {len(files)} files from {src_prefix} to {dest_prefix}")
+    else:
+        print(f"No files found in {src_prefix} folder")
+
+
+#####################copy xlsx to some folder and delete from input folder and convert into csv and transfer into another bucket folder ##########
+
+
+
+import sys
+import boto3
+import pandas as pd
+import io
+import datetime
+
+# Connect to S3 and get the resource object
+s3 = boto3.client("s3")
+s3_resource = boto3.resource("s3")
+
+# Set the input and output folders and buckets
+input_bucket = "ds-aaic-sachin"
+input_folder = "converter_output/"
+output_bucket = "output77"
+output_folder = "csv_output/"
+archive_folder = "archived_csv/"
+processed_folder = "dir_processed/"
+
+# Check if the output folders exist in the output bucket, and if not, create them
+try:
+    s3.list_objects(Bucket=output_bucket, Prefix=output_folder)
+except:
+    s3.put_object(Bucket=output_bucket, Key=output_folder)
+
+try:
+    s3.list_objects(Bucket=output_bucket, Prefix=archive_folder)
+except:
+    s3.put_object(Bucket=output_bucket, Key=archive_folder)
+
+# Get the list of already processed files and their modification times
+processed_files = {}
+try:
+    processed_objects = s3.list_objects(Bucket=output_bucket, Prefix=output_folder)["Contents"]
+    for obj in processed_objects:
+        if obj["Key"].endswith(".csv"):
+            processed_files[obj["Key"]] = obj["LastModified"]
+except:
+    pass
+
+# List all the Excel files in the input folder, convert new files, and move original files to dir_processed
+objects = s3.list_objects(Bucket=input_bucket, Prefix=input_folder)["Contents"]
+for obj in objects:
+    file_name = obj["Key"]
+    input_last_modified = obj["LastModified"]
+    if not file_name.endswith(".xlsx"):
+        continue
+    csv_file_name = file_name.replace(".xlsx", ".csv").replace(input_folder, output_folder)
+    archive_file_name = file_name.replace(".xlsx", f"_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.csv").replace(input_folder, archive_folder)
+    processed_file_name = file_name.replace(input_folder, processed_folder)
+    if csv_file_name in processed_files:
+        output_last_modified = processed_files[csv_file_name]
+        if output_last_modified >= input_last_modified:
+            s3.copy_object(Bucket=input_bucket, CopySource={'Bucket': input_bucket, 'Key': file_name}, Key=processed_file_name)
+            s3.delete_object(Bucket=input_bucket, Key=file_name)
+            continue
+    obj = s3_resource.Object(input_bucket, file_name)
+    file = obj.get()["Body"].read()
+    read_file = pd.read_excel(file)
+    csv_buffer = io.StringIO()
+    read_file.to_csv(csv_buffer, index=None, header=True)
+    csv_buffer_encoded = csv_buffer.getvalue().encode('utf-8')
+    s3.put_object(Bucket=output_bucket, Key=csv_file_name, Body=csv_buffer_encoded)
+    s3.put_object(Bucket=output_bucket, Key=archive_file_name, Body=csv_buffer_encoded)
+    s3.copy_object(Bucket=input_bucket, CopySource={'Bucket': input_bucket, 'Key': file_name}, Key=processed_file_name)
+    s3.delete_object(Bucket=input_bucket, Key=file_name)
+    processed_files[csv_file_name] = s3.head_object(Bucket=output_bucket, Key=csv_file_name)["LastModified"]
+
+
+
+
+    
+
